@@ -93,6 +93,228 @@ async function ensureDoc() {
   return state.doc;
 }
 
+/* ---------------- History (localStorage) ---------------- */
+const HISTORY_KEY = "pdfStudioHistory";
+
+const ACTIONS = {
+  viewed: "Viewed",
+  text: "Text",
+  ocr: "OCR",
+  split: "Split",
+  compress: "Compressed",
+};
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveHistory(h) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(h));
+  } catch {}
+}
+
+function recordAction(fileName, action, extra = {}) {
+  const h = loadHistory();
+  const entry = h[fileName] || { name: fileName, actions: {} };
+  entry.name = fileName;
+  if (extra.size != null) entry.size = extra.size;
+  entry.actions[action] = { at: Date.now(), ...extra };
+  entry.lastAt = Date.now();
+  h[fileName] = entry;
+  saveHistory(h);
+  renderHistory();
+  renderRecent();
+}
+
+function clearHistory() {
+  try { localStorage.removeItem(HISTORY_KEY); } catch {}
+  renderHistory();
+  renderRecent();
+}
+
+function fmtWhen(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function buildHistoryItem(entry) {
+  const item = document.createElement("div");
+  item.className = "history-item";
+
+  const head = document.createElement("div");
+  head.className = "history-item-head";
+  const name = document.createElement("span");
+  name.className = "history-item-name";
+  name.title = entry.name;
+  name.textContent = entry.name;
+  const when = document.createElement("span");
+  when.className = "history-item-when";
+  when.textContent = fmtWhen(entry.lastAt);
+  head.appendChild(name);
+  head.appendChild(when);
+  item.appendChild(head);
+
+  const badges = document.createElement("div");
+  badges.className = "history-badges";
+  for (const [key, label] of Object.entries(ACTIONS)) {
+    const done = !!entry.actions[key];
+    const b = document.createElement("span");
+    b.className = "badge" + (done ? " done" : "");
+    b.innerHTML = (done ? '<span class="tick">✔</span>' : "") + label;
+    badges.appendChild(b);
+  }
+  item.appendChild(badges);
+  return item;
+}
+
+function renderHistory() {
+  const list = $("history-list");
+  const count = $("history-count");
+  if (!list) return;
+  const h = loadHistory();
+  const entries = Object.values(h).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0));
+  if (count) count.textContent = entries.length ? `${entries.length} file${entries.length === 1 ? "" : "s"}` : "No files yet";
+  list.innerHTML = "";
+  if (!entries.length) {
+    const empty = document.createElement("p");
+    empty.className = "panel-sub";
+    empty.textContent = "Load a PDF and run tools — they'll be tracked here.";
+    list.appendChild(empty);
+    return;
+  }
+  entries.forEach((e) => list.appendChild(buildHistoryItem(e)));
+}
+
+function renderRecent() {
+  const block = $("recent-block");
+  const list = $("recent-list");
+  if (!block || !list) return;
+  const h = loadHistory();
+  const entries = Object.values(h).sort((a, b) => (b.lastAt || 0) - (a.lastAt || 0)).slice(0, 6);
+  block.hidden = entries.length === 0;
+  list.innerHTML = "";
+  entries.forEach((e) => list.appendChild(buildHistoryItem(e)));
+}
+
+/* ---------------- Working folder (File System Access API) ---------------- */
+const FS_DB = "pdfStudioFs";
+const FS_STORE = "handles";
+let workingFolder = null;
+
+function openFSDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(FS_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(FS_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function persistWorkingFolder(handle) {
+  const db = await openFSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FS_STORE, "readwrite");
+    tx.objectStore(FS_STORE).put(handle, "folder");
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
+}
+
+async function restoreWorkingFolder() {
+  const db = await openFSDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(FS_STORE, "readonly");
+    const req = tx.objectStore(FS_STORE).get("folder");
+    req.onsuccess = () => { db.close(); resolve(req.result || null); };
+    req.onerror = () => { db.close(); reject(req.error); };
+  });
+}
+
+function updateFolderLabel() {
+  const label = $("folder-label");
+  const btn = $("btn-folder");
+  if (workingFolder) {
+    label.textContent = workingFolder.name;
+    btn.classList.add("connected");
+    btn.title = "Working folder: " + workingFolder.name + " (click to change)";
+  } else {
+    label.textContent = "Working folder";
+    btn.classList.remove("connected");
+    btn.title = "Choose a working folder to save outputs into";
+  }
+}
+
+async function pickWorkingFolder() {
+  if (!window.showDirectoryPicker) {
+    toast("Save-to-folder needs Chrome/Edge on HTTPS or localhost.", "error");
+    return null;
+  }
+  try {
+    workingFolder = await window.showDirectoryPicker({ mode: "readwrite" });
+    await persistWorkingFolder(workingFolder);
+    updateFolderLabel();
+    toast(`Working folder: ${workingFolder.name}`, "ok");
+    return workingFolder;
+  } catch (e) {
+    if (e.name === "AbortError") return null;
+    console.error(e);
+    toast("Could not select folder.", "error");
+    return null;
+  }
+}
+
+async function ensureWorkingFolder() {
+  if (!window.showDirectoryPicker) {
+    toast("Save-to-folder needs Chrome/Edge on HTTPS or localhost.", "error");
+    return null;
+  }
+  if (!workingFolder) {
+    try {
+      workingFolder = await restoreWorkingFolder();
+      if (workingFolder) updateFolderLabel();
+    } catch {}
+  }
+  if (workingFolder) {
+    try {
+      let perm = await workingFolder.queryPermission({ mode: "readwrite" });
+      if (perm !== "granted") {
+        perm = await workingFolder.requestPermission({ mode: "readwrite" });
+      }
+      if (perm !== "granted") {
+        toast("Folder permission denied.", "error");
+        return null;
+      }
+    } catch {
+      workingFolder = null;
+    }
+  }
+  if (!workingFolder) workingFolder = await pickWorkingFolder();
+  return workingFolder;
+}
+
+async function saveToFolder(blob, name) {
+  const dir = await ensureWorkingFolder();
+  if (!dir) return false;
+  try {
+    const fileHandle = await dir.getFileHandle(name, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return true;
+  } catch (e) {
+    console.error(e);
+    toast(`Could not save "${name}" to folder.`, "error");
+    return false;
+  }
+}
+
 /* ---------------- File loading ---------------- */
 async function loadFile(file) {
   if (!file || file.type !== "application/pdf") {
@@ -140,12 +362,18 @@ async function loadFile(file) {
   $("text-meta").hidden = true;
   $("btn-copy-text").hidden = true;
   $("btn-download-text").hidden = true;
+  $("btn-save-text").hidden = true;
   $("ocr-output").value = "";
   $("btn-copy-ocr").hidden = true;
   $("btn-download-ocr").hidden = true;
+  $("btn-save-ocr").hidden = true;
   $("split-results").innerHTML = "";
   $("btn-download-zip").hidden = true;
+  $("btn-save-all").hidden = true;
   $("compress-result").hidden = true;
+
+  // Track in history
+  recordAction(file.name, "viewed", { size: file.size });
 
   await renderThumbs();
   await renderPage();
@@ -321,8 +549,10 @@ $("btn-extract").addEventListener("click", async () => {
   $("text-meta").hidden = false;
   $("btn-copy-text").hidden = false;
   $("btn-download-text").hidden = false;
+  $("btn-save-text").hidden = false;
   progress.hidden = true;
   btn.disabled = false;
+  if (full.trim()) recordAction(state.fileName, "text");
   toast(full.trim() ? "Text extracted." : "No embedded text found — try OCR instead.", full.trim() ? "ok" : "error");
 });
 
@@ -334,6 +564,12 @@ $("btn-copy-text").addEventListener("click", async () => {
 $("btn-download-text").addEventListener("click", () => {
   const blob = new Blob([$("text-output").value], { type: "text/plain" });
   downloadBlob(blob, state.baseName + "-text.txt");
+});
+
+$("btn-save-text").addEventListener("click", async () => {
+  const blob = new Blob([$("text-output").value], { type: "text/plain" });
+  const ok = await saveToFolder(blob, state.baseName + "-text.txt");
+  if (ok) toast("Saved text to working folder.", "ok");
 });
 
 /* ---------------- OCR ---------------- */
@@ -375,6 +611,8 @@ $("btn-ocr").addEventListener("click", async () => {
     $("ocr-output").value = full;
     $("btn-copy-ocr").hidden = false;
     $("btn-download-ocr").hidden = false;
+    $("btn-save-ocr").hidden = false;
+    if (full.trim()) recordAction(state.fileName, "ocr");
     toast("OCR complete.", "ok");
   } catch (err) {
     console.error(err);
@@ -396,6 +634,12 @@ $("btn-copy-ocr").addEventListener("click", async () => {
 $("btn-download-ocr").addEventListener("click", () => {
   const blob = new Blob([$("ocr-output").value], { type: "text/plain" });
   downloadBlob(blob, state.baseName + "-ocr.txt");
+});
+
+$("btn-save-ocr").addEventListener("click", async () => {
+  const blob = new Blob([$("ocr-output").value], { type: "text/plain" });
+  const ok = await saveToFolder(blob, state.baseName + "-ocr.txt");
+  if (ok) toast("Saved OCR text to working folder.", "ok");
 });
 
 /* ---------------- Split ---------------- */
@@ -444,6 +688,7 @@ $("btn-split").addEventListener("click", async () => {
   progress.hidden = false;
   results.innerHTML = "";
   $("btn-download-zip").hidden = true;
+  $("btn-save-all").hidden = true;
   state.splitOutputs = [];
 
   let doc;
@@ -492,6 +737,8 @@ $("btn-split").addEventListener("click", async () => {
 
     renderSplitResults();
     $("btn-download-zip").hidden = false;
+    $("btn-save-all").hidden = false;
+    recordAction(state.fileName, "split", { count: ranges.length });
     toast(`Split into ${ranges.length} file(s).`, "ok");
   } catch (err) {
     console.error(err);
@@ -534,6 +781,24 @@ $("btn-download-zip").addEventListener("click", async () => {
   const blob = await zip.generateAsync({ type: "blob" });
   downloadBlob(blob, state.baseName + "-split.zip");
   toast("ZIP downloaded.", "ok");
+});
+
+$("btn-save-all").addEventListener("click", async () => {
+  const dir = await ensureWorkingFolder();
+  if (!dir) return;
+  let saved = 0;
+  for (const out of state.splitOutputs) {
+    try {
+      const fileHandle = await dir.getFileHandle(out.name, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(out.blob);
+      await writable.close();
+      saved++;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  toast(`Saved ${saved} of ${state.splitOutputs.length} file(s) to working folder.`, saved ? "ok" : "error");
 });
 
 /* ---------------- Compress ---------------- */
@@ -602,6 +867,7 @@ $("btn-compress").addEventListener("click", async () => {
     $("size-after").textContent = fmtSize(blob.size);
     $("size-saved").textContent = pct + "% (" + fmtSize(originalSize - blob.size) + ")";
     $("compress-result").hidden = false;
+    recordAction(state.fileName, "compress", { saved: pct });
     toast(pct > 0 ? `Shrunk by ${pct}%.` : "File is already well-compressed.", pct > 0 ? "ok" : "");
   } catch (err) {
     console.error(err);
@@ -615,3 +881,27 @@ $("btn-compress").addEventListener("click", async () => {
 $("btn-download-compressed").addEventListener("click", () => {
   if (state.compressBlob) downloadBlob(state.compressBlob, state.baseName + "-compressed.pdf");
 });
+
+$("btn-save-compressed").addEventListener("click", async () => {
+  if (!state.compressBlob) return;
+  const ok = await saveToFolder(state.compressBlob, state.baseName + "-compressed.pdf");
+  if (ok) toast("Saved compressed PDF to working folder.", "ok");
+});
+
+/* ---------------- Working folder + history wiring ---------------- */
+$("btn-folder").addEventListener("click", () => pickWorkingFolder());
+$("btn-clear-history").addEventListener("click", clearHistory);
+$("btn-clear-history-drop").addEventListener("click", (e) => {
+  e.stopPropagation();
+  clearHistory();
+});
+$("recent-block").addEventListener("click", (e) => e.stopPropagation());
+
+(async function init() {
+  renderHistory();
+  renderRecent();
+  try {
+    workingFolder = await restoreWorkingFolder();
+  } catch {}
+  updateFolderLabel();
+})();

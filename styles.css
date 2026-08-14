@@ -121,7 +121,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 /* ---------- Layout ---------- */
 .app-main { flex: 1; display: flex; min-height: 0; }
 
-.dropzone { flex: 1; display: grid; place-items: center; padding: 32px; }
+.dropzone { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px; overflow-y: auto; }
 .dropzone-inner {
   display: flex;
   flex-direction: column;
@@ -348,6 +348,49 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .size-row strong { font-variant-numeric: tabular-nums; }
 .size-row.save strong { color: var(--ok); }
 .size-row.save span { color: var(--ok); }
+
+/* Working folder */
+#btn-folder .folder-icon { font-size: 15px; }
+#btn-folder { gap: 7px; }
+#btn-folder.connected { border-color: var(--ok); color: var(--ok); }
+
+/* History */
+.history-toolbar { display: flex; align-items: center; justify-content: space-between; }
+.history-count { font-size: 12.5px; color: var(--muted); }
+.history-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex: 1; min-height: 0; }
+.history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 13px;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+}
+.history-item-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.history-item-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-item-when { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.history-badges { display: flex; flex-wrap: wrap; gap: 5px; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.badge.done { background: rgba(99, 102, 241, 0.18); color: #b9befa; border-color: rgba(99, 102, 241, 0.4); }
+.badge .tick { font-size: 10px; }
+
+/* Recent block on dropzone */
+.recent-block { margin-top: 28px; width: 100%; max-width: 620px; }
+.recent-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.recent-header h3 { font-size: 15px; font-weight: 700; }
+.history-list.compact { max-height: 260px; }
 
 /* Toast */
 .toast {

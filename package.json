@@ -1,0 +1,12 @@
+{
+  "name": "pdf-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Client-side PDF toolbox: view, extract text, OCR, split, and compress.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

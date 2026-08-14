@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openship.io/openship.schema.json",
+  "framework": "node",
+  "installCommand": "npm install",
+  "startCommand": "node server.js",
+  "buildImage": "ubuntu:22.04",
+  "workload": "web",
+  "port": 8080
+}
